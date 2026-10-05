@@ -1,0 +1,6 @@
+# 编辑器 / 工具缓存
+.cline/
+.cursor/
+.opencode/node_modules/
+
+# 由 ikd/.gitignore 处理 bin/obj/dist

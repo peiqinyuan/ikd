@@ -1,0 +1,36 @@
+// 泛型（擦除）+ 容器
+class Box<T> {
+    let value: T;
+
+    init(value) { this.value = value; }
+
+    fn get(): T { return this.value; }
+    fn set(v: T) { this.value = v; }
+}
+
+fn firstOr<T>(list, fallback) {
+    if (len(list) > 0) { return list[0]; }
+    return fallback;
+}
+
+fn main(args) {
+    let bi = Box(42);
+    let bs = Box("text");
+    println("box: " + toStr(bi.get()) + ", " + bs.get());
+    bs.set("changed");
+    println("box: " + bs.get());
+
+    println("first: " + toStr(firstOr([1, 2, 3], 0)));
+    println("first: " + toStr(firstOr([], 99)));
+
+    let pairs = [[1, "a"], [2, "b"]];
+    for p in pairs {
+        println("pair " + toStr(p[0]) + "=" + toStr(p[1]));
+    }
+
+    var m = {"x": 10};
+    m["y"] = 20;
+    println("map x=" + toStr(m["x"]) + " y=" + toStr(m["y"]));
+
+    return 0;
+}

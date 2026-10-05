@@ -1,0 +1,14 @@
+fn makeAdder(n) {
+    return |x| x + n;
+}
+
+fn twice(f, x) {
+    return f(f(x));
+}
+
+fn main(args) {
+    let add10 = makeAdder(10);
+    println("add10(5)=" + toStr(add10(5)));
+    println("twice=" + toStr(twice(|n| n * 2, 3)));
+    return 0;
+}

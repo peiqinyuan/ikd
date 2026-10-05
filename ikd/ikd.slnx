@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Ikd.Runtime/Ikd.Runtime.csproj" />
+    <Project Path="src/Ikd.Compiler/Ikd.Compiler.csproj" />
+    <Project Path="src/Ikd.Cli/Ikd.Cli.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Ikd.Tests/Ikd.Tests.csproj" />
+  </Folder>
+</Solution>

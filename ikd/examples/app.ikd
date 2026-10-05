@@ -1,0 +1,8 @@
+import "geometry";
+
+fn main(args) {
+    let r = geometry.Rect(3.0, 4.0);
+    println("area=" + toStr(geometry.areaOf(r)));
+    println("kind=" + geometry.describe(geometry.Kind.Rect));
+    return 0;
+}

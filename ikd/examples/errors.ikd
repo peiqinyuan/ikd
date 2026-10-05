@@ -1,0 +1,15 @@
+fn boom() {
+    throw "爆炸了";
+}
+
+fn main(args) {
+    try {
+        boom();
+        println("不会执行到这里");
+    } catch e {
+        println("捕获: " + toStr(e));
+    } finally {
+        println("finally");
+    }
+    return 0;
+}

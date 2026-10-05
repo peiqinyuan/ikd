@@ -1,0 +1,54 @@
+interface Speak {
+    fn speak(): Str;
+}
+
+abstract class Animal : Speak {
+    let name: Str;
+
+    init(name) { this.name = name; }
+
+    fn speak(): Str { return "..."; }
+    fn greet(): Str { return this.name + ": " + this.speak(); }
+}
+
+class Dog : Animal, Speak {
+    init(name) { super.init(name); }
+    override fn speak(): Str { return "woof"; }
+}
+
+class Cat : Animal, Speak {
+    init(name) { super.init(name); }
+    override fn speak(): Str { return "meow"; }
+}
+
+fn main(args) {
+    let animals = [Dog("Rex"), Cat("Mimi")];
+    for a in animals {
+        println(a.greet());
+    }
+
+    let s: Speak = Dog("Buddy");
+    println("via iface: " + s.speak());
+
+    try {
+        try {
+            throw 1;
+        } finally {
+            println("inner finally");
+        }
+    } catch e {
+        println("outer caught " + toStr(e));
+    }
+
+    let x = null;
+    println("nullsafe=" + toStr(x?.anything));
+
+    let n = 7;
+    let r = match n {
+        is Int when n > 5 => "big int",
+        is Int => "small int",
+        _ => "mid",
+    };
+    println(r);
+    return 0;
+}

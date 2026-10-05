@@ -1,0 +1,91 @@
+// 综合示例：类 / 继承 / 接口 / 枚举 / match / 闭包 / 异常
+interface Shape {
+    fn area(): Float;
+    fn name(): Str;
+}
+
+class Rect : Shape {
+    let w: Float;
+    let h: Float;
+
+    init(w, h) {
+        this.w = w;
+        this.h = h;
+    }
+
+    fn area(): Float { return this.w * this.h; }
+    fn name(): Str { return "rect"; }
+}
+
+class Square : Rect {
+    init(s) { super.init(s, s); }
+    override fn name(): Str { return "square"; }
+}
+
+class Counter {
+    static var total = 0;
+    static fn bump(n) {
+        Counter.total = Counter.total + n;
+        return Counter.total;
+    }
+}
+
+enum Tree {
+    Leaf(Int),
+    Node(Tree, Tree),
+}
+
+fn sum(t) {
+    return match t {
+        Tree.Leaf(v) => v,
+        Tree.Node(l, r) => sum(l) + sum(r),
+        _ => 0,
+    };
+}
+
+fn classify(n) {
+    return match n {
+        0 => "zero",
+        1 when n > 0 => "one",
+        is Int => "int",
+        _ => "other",
+    };
+}
+
+fn makeAdder(n) {
+    return |x| x + n;
+}
+
+fn main(args) {
+    let shapes = [Rect(3.0, 4.0), Square(5.0)];
+    for s in shapes {
+        println(s.name() + " area=" + toStr(s.area()));
+    }
+
+    println("bump: " + toStr(Counter.bump(2)) + "," + toStr(Counter.bump(3)));
+
+    let t = Tree.Node(Tree.Leaf(1), Tree.Node(Tree.Leaf(2), Tree.Leaf(3)));
+    println("sum=" + toStr(sum(t)));
+
+    println(classify(0) + "/" + classify(1) + "/" + classify(9));
+
+    let add5 = makeAdder(5);
+    println("add5(37)=" + toStr(add5(37)));
+
+    try {
+        throw "boom";
+    } catch e {
+        println("caught: " + toStr(e));
+    } finally {
+        println("finally ran");
+    }
+
+    let m = {"a": 1, "b": 2};
+    println("map a=" + toStr(m["a"]) + " len=" + toStr(len(m)));
+
+    let sum2 = 0;
+    for i in range(1, 5) { sum2 = sum2 + i; }
+    println("range sum=" + toStr(sum2));
+
+    return 0;
+}

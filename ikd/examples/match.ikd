@@ -1,0 +1,36 @@
+enum Color { Red, Green, Blue }
+
+enum Tree {
+    Leaf(Int),
+    Node(Tree, Tree),
+}
+
+fn colorName(c) {
+    return match c {
+        Color.Red => "红",
+        Color.Green => "绿",
+        Color.Blue => "蓝",
+        _ => "?",
+    };
+}
+
+fn sum(t) {
+    return match t {
+        Tree.Leaf(v) => v,
+        Tree.Node(l, r) => sum(l) + sum(r),
+        _ => 0,
+    };
+}
+
+fn main(args) {
+    println(colorName(Color.Green));
+    let t = Tree.Node(Tree.Leaf(4), Tree.Leaf(8));
+    println("sum=" + toStr(sum(t)));
+    let n = 9;
+    println(match n {
+        is Int when n > 8 => "big",
+        is Int => "small",
+        _ => "other",
+    });
+    return 0;
+}
