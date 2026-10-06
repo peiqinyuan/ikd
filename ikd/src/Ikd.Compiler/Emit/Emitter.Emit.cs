@@ -60,6 +60,12 @@ public sealed partial class Emitter
                 _bag.Report(ErrorCode.ImportOutsideTopLevel, im.PathSpan,
                     "import 只能出现在模块顶层");
                 break;
+            case MacroDecl:
+                // 顶层宏已在 Emit() 开头统一登记；这里只处理被放进函数/块里的非法情形
+                if (!IsAtModuleLevel())
+                    _bag.Report(ErrorCode.MisplacedKeyword, stmt.Span,
+                        "macro 只能定义在模块顶层");
+                break;
             case ClassDecl:
             case EnumDecl:
             case InterfaceDecl:
@@ -134,6 +140,35 @@ public sealed partial class Emitter
         EmitClosureOp(index, fnCtx);
         KeepU16(Op.StoreLocalCell, sym.Index);
         Pop(Op.Pop);
+    }
+
+    /// <summary>登记宏。重复定义/重名冲突都报 E3008。</summary>
+    private void DefineMacro(MacroDecl m)
+    {
+        if (m.Name.Length == 0) return;
+        if (_macros.ContainsKey(m.Name))
+        {
+            _bag.Report(ErrorCode.DuplicateDefinition, m.NameSpan, $"宏 '{m.Name}' 重复定义");
+            return;
+        }
+        if (_globals.ContainsKey(m.Name) || _types.ContainsKey(m.Name) ||
+            _globalscope.FindLocal(m.Name) is not null)
+        {
+            _bag.Report(ErrorCode.DuplicateDefinition, m.NameSpan,
+                $"'{m.Name}' 已被定义为变量或类型，不能作为宏名");
+            return;
+        }
+
+        for (int i = 0; i < m.Params.Count; i++)
+            for (int j = i + 1; j < m.Params.Count; j++)
+                if (m.Params[i].Name.Length > 0 && m.Params[i].Name == m.Params[j].Name)
+                {
+                    _bag.Report(ErrorCode.DuplicateDefinition, m.Params[j].NameSpan,
+                        $"宏形参 '{m.Params[j].Name}' 重复");
+                    break;
+                }
+
+        _macros[m.Name] = m;
     }
 
     private void EmitVarDecl(VarDeclStmt v)

@@ -77,6 +77,12 @@ public sealed partial class Emitter
             case MatchExpr mm:
                 EmitMatch(mm);
                 break;
+            case IfExpr ie:
+                EmitIfExpr(ie);
+                break;
+            case BlockValueExpr bv:
+                EmitBlockValue(bv);
+                break;
             case CastExpr ce:
                 EmitExpression(ce.Target);
                 KeepU32(Op.Cast, TypeDescIndex(ce.Type));
@@ -171,6 +177,41 @@ public sealed partial class Emitter
             Emit(Op.LoadUpvalue);
             U16(up);
             D(1);
+            return;
+        }
+
+        // 函数宏形参 → 调用处实参（宏体内的名字优先用实参表达式替换）
+        if (FindMacroArg(name) is { } arg)
+        {
+            EmitExpression(arg);
+            return;
+        }
+
+        // 常量宏在编译期展开
+        if (_macros.TryGetValue(name, out var macro))
+        {
+            if (!macro.IsConst)
+            {
+                _bag.Report(ErrorCode.NotCallable, n.NameSpan,
+                    $"函数宏 '{name}' 只能作为调用使用: {name}(...)");
+                Push(Op.Null);
+                return;
+            }
+            if (!_macroExpanding.Add(name))
+            {
+                _bag.Report(ErrorCode.MacroRecursive, n.NameSpan,
+                    $"宏 '{name}' 在展开中引用了自身，会无限递归");
+                Push(Op.Null);
+                return;
+            }
+            try
+            {
+                EmitExpression(macro.Value!);
+            }
+            finally
+            {
+                _macroExpanding.Remove(name);
+            }
             return;
         }
 
@@ -274,6 +315,32 @@ public sealed partial class Emitter
         int X = _ctx!.Depth;
         int argc = call.Args.Count;
 
+        // 函数宏展开（优先于内置函数与类构造）
+        if (call.Callee is NameExpr me && _macros.TryGetValue(me.Name, out var mac) &&
+            LookupValue(_ctx!, me.Name) is not { Kind: SymKind.Local } &&
+            ResolveUpvalue(_ctx!, me.Name) < 0)
+        {
+            if (mac.IsConst)
+            {
+                _bag.Report(ErrorCode.NotCallable, call.Span,
+                    $"常量宏 '{me.Name}' 不是函数，不能调用");
+                Push(Op.Null);
+                SetDepth(X + 1);
+                return;
+            }
+            EmitMacroCall(call, mac);
+            return;
+        }
+
+        // sizeof(内置类型名) → 编译期常量
+        if (argc == 1 && call.Callee is NameExpr se && se.Name == "sizeof" &&
+            IsPreludeFree("sizeof") && TryFoldTypeSize(call.Args[0], out int tsize))
+        {
+            PushU32(Op.Const, ConstIndex(Value.Of((long)tsize)));
+            SetDepth(X + 1);
+            return;
+        }
+
         // prelude 直调（可按实参个数选变体）
         if (call.Callee is NameExpr ne && Prelude.TryGetValue(ne.Name, out var pn) &&
             IsPreludeFree(ne.Name))
@@ -348,6 +415,100 @@ public sealed partial class Emitter
         U8(argc);
         D(-argc);
         SetDepth(X + 1);
+    }
+
+    /// <summary>当前展开的函数宏里，形参名对应的调用处实参表达式（内层帧优先）。</summary>
+    private Expression? FindMacroArg(string name)
+    {
+        foreach (var frame in _macroFrames)
+            if (frame.TryGetValue(name, out var e))
+                return e;
+        return null;
+    }
+
+    /// <summary>
+    /// 函数宏展开：实参先各求值一次存进临时 Cell，宏体内的形参名读该 Cell，
+    /// 不产生运行时调用帧；宏体内的同名局部变量会遮蔽形参。
+    /// 宏体在调用处原地发射，因此其中的 return/break/continue 作用于调用者。
+    /// 前置深度 X，后置 X+1。
+    /// </summary>
+    private void EmitMacroCall(CallExpr call, MacroDecl m)
+    {
+        int X = _ctx!.Depth;
+        if (call.Args.Count != m.Params.Count)
+            _bag.Report(ErrorCode.ArgumentCountMismatch,
+                call.LParenSpan.Length > 0 ? call.LParenSpan : call.Span,
+                $"宏 '{m.Name}' 需要 {m.Params.Count} 个参数，实得 {call.Args.Count} 个");
+
+        if (!_macroExpanding.Add(m.Name))
+        {
+            _bag.Report(ErrorCode.MacroRecursive, call.Span,
+                $"宏 '{m.Name}' 在展开中调用了自身，会无限递归");
+            Push(Op.Null);
+            return;
+        }
+
+        var frame = new Dictionary<string, Expression>(StringComparer.Ordinal);
+        bool framed = false;
+        try
+        {
+            PushScope();
+            try
+            {
+                // 1) 实参各求值一次，装进不可能与用户标识符重名的临时 Cell
+                for (int i = 0; i < m.Params.Count; i++)
+                {
+                    string pn = m.Params[i].Name;
+                    if (pn.Length == 0) continue;
+                    var sym = DeclareLocal(pn + "#" + m.Name + i, false, m.Params[i].NameSpan);
+                    if (i < call.Args.Count) EmitExpression(call.Args[i]);
+                    else Push(Op.Null);
+                    PopU16(Op.DefLocalCell, sym.Index);
+                    frame[pn] = new NameExpr { Name = sym.Name, NameSpan = m.Params[i].NameSpan };
+                }
+
+                // 2) 再发射宏体（此时内层帧已可见，外层帧仍可被实参表达式引用）
+                _macroFrames.Push(frame);
+                framed = true;
+                EmitExpression(new BlockValueExpr { Block = m.Body!, Span = call.Span });
+            }
+            finally
+            {
+                if (framed) _macroFrames.Pop();
+                PopScope();
+            }
+        }
+        finally
+        {
+            _macroExpanding.Remove(m.Name);
+        }
+        SetDepth(X + 1);
+    }
+
+    /// <summary>sizeof(内置类型名) 是否可折成编译期常量。</summary>
+    private bool TryFoldTypeSize(Expression e, out int size)
+    {
+        size = 0;
+        if (e is not NameExpr { Name.Length: > 0 } n) return false;
+        if (_types.ContainsKey(n.Name) || _globals.ContainsKey(n.Name)) return false;
+        if (LookupValue(_ctx!, n.Name) is not null) return false;
+        if (ResolveUpvalue(_ctx!, n.Name) >= 0) return false;
+
+        size = n.Name switch
+        {
+            "Null" => 0,
+            "Bool" => 1,
+            "Int" => 8,
+            "Float" => 8,
+            "Str" => 16,
+            "List" => 16,
+            "Map" => 16,
+            "Fn" => 48,
+            "Range" => 24,
+            "Error" => 24,
+            _ => -1,
+        };
+        return size >= 0;
     }
 
     // ----------------------------------------------------------------
@@ -453,6 +614,64 @@ public sealed partial class Emitter
         Patch(endJ);
         SetDepth(X + 1);
     }
+
+    private void EmitIfExpr(IfExpr ie)
+    {
+        int X = _ctx!.Depth;
+        EmitExpression(ie.Cond);               // X+1
+        int elseJ = EmitJump(Op.JumpIfFalse);
+        D(-1);                                 // X
+        EmitExpression(ie.Then);               // X+1
+        int endJ = EmitJump(Op.Jump);
+        Patch(elseJ);
+        SetDepth(X);
+        EmitExpression(ie.Else);               // X+1
+        Patch(endJ);
+        SetDepth(X + 1);
+    }
+
+    /// <summary>
+    /// 值块：最后一条语句若是表达式语句则其值即块值，否则为 null。
+    /// 前置深度 X，后置 X+1。
+    /// </summary>
+    private void EmitBlockValue(BlockValueExpr bv)
+    {
+        int X = _ctx!.Depth;
+        var all = bv.Block.Statements;
+        PushScope();
+        if (all.Count > 0 && AsValueExpr(all[^1]) is { } valueExpr)
+        {
+            var head = new BlockStmt { Span = bv.Block.Span };
+            for (int i = 0; i < all.Count - 1; i++) head.Statements.Add(all[i]);
+            EmitStatements(head);
+            EmitExpression(valueExpr);   // X+1
+        }
+        else
+        {
+            EmitStatements(bv.Block);
+            Push(Op.Null);               // X+1
+        }
+        PopScope();
+        SetDepth(X + 1);
+    }
+
+    /// <summary>把最后一条语句改写成取值表达式；无法取值返回 null。</summary>
+    private Expression? AsValueExpr(Statement s) => s switch
+    {
+        ExprStmt e => e.Expression,
+        BlockStmt b => new BlockValueExpr { Block = b, Span = b.Span },
+        IfStmt i when i.Else is not null => new IfExpr
+        {
+            Cond = i.Cond,
+            Then = new BlockValueExpr { Block = i.Then, Span = i.Then.Span },
+            Else = AsValueExpr(i.Else!) ?? LiteralNull(i.Else!.Span),
+            Span = i.Span,
+        },
+        _ => null,
+    };
+
+    private static LiteralExpr LiteralNull(TextSpan span)
+        => new() { Kind = LiteralKind.Null, Value = null, Span = span };
 
     // ----------------------------------------------------------------
     //  赋值

@@ -1,4 +1,6 @@
 using System.Globalization;
+using System.Net.Http.Headers;
+using System.Text;
 
 namespace Ikd.Runtime;
 
@@ -79,6 +81,7 @@ public static class StdLib
         AddNative("toInt", 1, (_, a) => Value.Of(ToIntOrThrow(a[0])));
         AddNative("toFloat", 1, (_, a) => Value.Of(ToFloatOrThrow(a[0])));
         AddNative("len", 1, (_, a) => Value.Of((long)LengthOf(a[0])));
+        AddNative("sizeof", 1, (_, a) => Value.Of(SizeOf(a[0])));
         AddNative("typeOf", 1, (_, a) => Value.OfStr(TypeNameOf(a[0])));
         AddNative("range", 2, (_, a) => Value.OfRef(new IkdRange(a[0].AsLong, a[1].AsLong, 1)));
         AddNative("range3", 3, (_, a) =>
@@ -99,6 +102,24 @@ public static class StdLib
                 throw new IkdRuntimeException("AssertionError", a[1].ToStr());
             return Value.Null;
         });
+        // List() / List(1, 2, 3)
+        AddNative("List", -1, (_, a) => Value.OfRef(new IkdList(a)));
+        // Map() / Map("k", v, "k2", v2)
+        AddNative("Map", -1, (_, a) =>
+        {
+            if (a.Length % 2 != 0)
+                throw new IkdRuntimeException("TypeError",
+                    $"Map 需要偶数个参数（键, 值, 键, 值...），实得 {a.Length} 个");
+            var m = new IkdMap();
+            for (int i = 0; i < a.Length; i += 2)
+            {
+                var k = IkdMap.NormalizeKey(a[i]);
+                if (k is null)
+                    throw new IkdRuntimeException("TypeError", "该值不能作为映射的键");
+                m.Pairs[k] = a[i + 1];
+            }
+            return Value.OfRef(m);
+        });
     }
 
     public static int LengthOf(Value v) => v.Kind switch
@@ -107,6 +128,35 @@ public static class StdLib
         ValueKind.Ref when v.AsRef is IkdList l => l.Items.Count,
         ValueKind.Ref when v.AsRef is IkdMap m => m.Pairs.Count,
         _ => throw new IkdRuntimeException("TypeError", $"len() 不支持类型 {TypeNameOf(v)}"),
+    };
+
+    /// <summary>近似内存占用（字节）：标量按值本身大小，引用类型含对象头并按元素累加。</summary>
+    public static long SizeOf(Value v) => v.Kind switch
+    {
+        ValueKind.Null => 0,
+        ValueKind.Bool => 1,
+        ValueKind.Int => 8,
+        ValueKind.Float => 8,
+        ValueKind.Ref => v.AsRef switch
+        {
+            IkdString s => 16 + 2L * s.Value.Length,
+            IkdList l => 16 + 16L * l.Items.Count,
+            IkdMap m => 16 + 48L * m.Pairs.Count,
+            IkdInstance i => 16 + 16L * i.Fields.Length,
+            IkdClass c => 48 + 16L * c.FieldCount,
+            IkdEnumValue e => 24 + 8L * e.Payload.Length,
+            IkdEnumType e => 48 + 8L * e.CaseNames.Length,
+            EnumCaseCtor => 32,
+            IkdClosure => 48,
+            IkdFunction f => 64 + 8L * f.LocalCount,
+            IkdNativeFn => 32,
+            IkdBoundMethod => 32,
+            IkdRange => 24,
+            IkdNamespace => 48,
+            IkdError => 24,
+            _ => 32,
+        },
+        _ => 16,
     };
 
     public static string TypeNameOf(Value v) => v.Kind switch
@@ -234,6 +284,10 @@ public static class StdLib
         var map = new NativeModule("map");
         map.Members["new"] = new IkdNativeFn("new", 0, (_, _) => Value.OfRef(new IkdMap()));
         ModuleMap["std.map"] = map;
+
+        var http = new NativeModule("http");
+        http.Members["request"] = Value.OfRef(new IkdNativeFn("request", -1, (_, a) => HttpRequest(a)));
+        ModuleMap["std.http"] = http;
     }
 
     private static IkdNativeFn MathFn(string name, int arity, Func<Value[], double> f)
@@ -244,6 +298,134 @@ public static class StdLib
 
     private static IkdNativeFn StrFn(string name, int arity, Func<IkdString, Value> f)
         => new(name, arity, (_, a) => f(a[0].AsString));
+
+    // ---------------------------------------------------------------
+    //  std.http
+    // ---------------------------------------------------------------
+
+    private const int DefaultHttpTimeoutSeconds = 30;
+
+    private static readonly Lazy<HttpClient> Http = new(() =>
+    {
+        var handler = new SocketsHttpHandler
+        {
+            AutomaticDecompression = System.Net.DecompressionMethods.All,
+            PooledConnectionLifetime = TimeSpan.FromMinutes(2),
+            ConnectTimeout = TimeSpan.FromSeconds(10),
+        };
+        // 每次调用自己带超时，这里不设全局超时
+        return new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
+    });
+
+    /// <summary>
+    /// http.request(method, url, body?, headers?, timeoutSeconds?) → Map。
+    /// 网络/协议层面的问题不抛异常，而是放进返回值的 error 字段。
+    /// </summary>
+    private static Value HttpRequest(Value[] args)
+    {
+        if (args.Length < 2 || args.Length > 5)
+            throw new IkdRuntimeException("TypeError",
+                "http.request 需要 2~5 个参数: request(method, url, body?, headers?, timeoutSeconds?)");
+        if (!args[0].IsStr)
+            throw new IkdRuntimeException("TypeError", "request 的 method 必须是 Str");
+        if (!args[1].IsStr)
+            throw new IkdRuntimeException("TypeError", "request 的 url 必须是 Str");
+        if (args.Length >= 3 && !args[2].IsNull && !args[2].IsStr)
+            throw new IkdRuntimeException("TypeError", "request 的 body 必须是 Str 或 null");
+        if (args.Length >= 4 && !args[3].IsNull && args[3].AsRef is not IkdMap)
+            throw new IkdRuntimeException("TypeError", "request 的 headers 必须是 Map");
+        if (args.Length >= 5 && !args[4].IsInt)
+            throw new IkdRuntimeException("TypeError", "request 的 timeoutSeconds 必须是 Int");
+
+        string method = args[0].AsString.Value.Trim();
+        string url = args[1].AsString.Value;
+
+        var res = new IkdMap();
+        res.Pairs["method"] = Value.OfStr(method.ToUpperInvariant());
+        res.Pairs["url"] = Value.OfStr(url);
+        res.Pairs["status"] = Value.Of(0L);
+        res.Pairs["ok"] = Value.False;
+        res.Pairs["body"] = Value.OfStr("");
+        res.Pairs["headers"] = Value.OfRef(new IkdMap());
+        res.Pairs["error"] = Value.OfStr("");
+        res.Pairs["errorType"] = Value.OfStr("");
+
+        if (method.Length == 0 || method.Any(c => char.IsWhiteSpace(c) || c < 0x21 || c > 0x7E))
+            return HttpFail(res, "ValueError", $"非法的 HTTP 方法: \"{method}\"");
+        if (!url.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
+            !url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            return HttpFail(res, "ValueError", $"URL 必须以 http:// 或 https:// 开头: \"{url}\"");
+
+        bool hasBody = args.Length >= 3 && !args[2].IsNull;
+        int timeout = args.Length >= 5
+            ? (int)Math.Clamp(args[4].AsLong, 1L, 600L)
+            : DefaultHttpTimeoutSeconds;
+
+        try
+        {
+            using var req = new HttpRequestMessage(new HttpMethod(method), url);
+            if (hasBody) req.Content = new StringContent(args[2].AsString.Value, Encoding.UTF8);
+
+            if (args.Length >= 4 && args[3].AsRef is IkdMap hm)
+                foreach (var kv in hm.Pairs)
+                    ApplyRequestHeader(req, hasBody, kv.Key.ToString() ?? "", kv.Value.ToStr());
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeout));
+            using var resp = Http.Value
+                .SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cts.Token)
+                .GetAwaiter().GetResult();
+
+            res.Pairs["status"] = Value.Of((long)(int)resp.StatusCode);
+            res.Pairs["ok"] = Value.Of(resp.IsSuccessStatusCode);
+
+            var rh = new IkdMap();
+            foreach (var h in resp.Headers)
+                rh.Pairs[h.Key.ToLowerInvariant()] = Value.OfStr(string.Join(", ", h.Value));
+            if (resp.Content is not null)
+            {
+                foreach (var h in resp.Content.Headers)
+                    rh.Pairs[h.Key.ToLowerInvariant()] = Value.OfStr(string.Join(", ", h.Value));
+                res.Pairs["body"] = Value.OfStr(
+                    resp.Content.ReadAsStringAsync(cts.Token).GetAwaiter().GetResult());
+            }
+            res.Pairs["headers"] = Value.OfRef(rh);
+            return Value.OfRef(res);
+        }
+        catch (Exception ex)
+        {
+            Exception e = ex;
+            while (e is AggregateException { InnerExceptions.Count: 1 } ag)
+                e = ag.InnerExceptions[0];
+            if (e is OperationCanceledException)
+                return HttpFail(res, "TimeoutError", $"请求超时（{timeout} 秒）: {url}");
+            if (e is FormatException && url.StartsWith("http", StringComparison.OrdinalIgnoreCase))
+                return HttpFail(res, "ValueError", $"URL 无法解析: {url}");
+            return HttpFail(res, e.GetType().Name, e.Message);
+        }
+    }
+
+    private static Value HttpFail(IkdMap res, string type, string message)
+    {
+        res.Pairs["error"] = Value.OfStr(message);
+        res.Pairs["errorType"] = Value.OfStr(type);
+        return Value.OfRef(res);
+    }
+
+    /// <summary>请求头按「请求头 → 内容头」顺序尝试，Content-Type 先删后加避免拼接。</summary>
+    private static void ApplyRequestHeader(HttpRequestMessage req, bool hasContent,
+        string key, string value)
+    {
+        if (key.Length == 0) return;
+        if (req.Headers.TryAddWithoutValidation(key, value)) return;
+        if (!hasContent || req.Content is null) return;
+        if (key.Equals("Content-Type", StringComparison.OrdinalIgnoreCase))
+        {
+            req.Content.Headers.Remove(key);
+            req.Content.Headers.TryAddWithoutValidation(key, value);
+            return;
+        }
+        req.Content.Headers.TryAddWithoutValidation(key, value);
+    }
 
     // ---------------------------------------------------------------
     //  内置方法分发

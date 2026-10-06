@@ -118,8 +118,11 @@ public sealed partial class Emitter
         ["toFloat"] = "toFloat",
         ["len"] = "len",
         ["typeOf"] = "typeOf",
+        ["sizeof"] = "sizeof",
         ["range"] = "range",
         ["assert"] = "assert",
+        ["List"] = "List",
+        ["Map"] = "Map",
     };
 
     private readonly ProgramState _prog;
@@ -141,6 +144,13 @@ public sealed partial class Emitter
     private readonly List<TypeDesc> _typeDescs = new();
     private readonly Dictionary<string, TypeSymbol> _types = new(StringComparer.Ordinal);
     private readonly Scope _globalscope = new();
+
+    /// <summary>本模块登记的宏（先定义后使用，仅模块顶层）。</summary>
+    private readonly Dictionary<string, MacroDecl> _macros = new(StringComparer.Ordinal);
+    /// <summary>当前展开中的宏（用于检测宏自引用 / 递归展开）。</summary>
+    private readonly HashSet<string> _macroExpanding = new(StringComparer.Ordinal);
+    /// <summary>函数宏展开栈：形参名 → 调用处实参表达式（内层优先）。</summary>
+    private readonly Stack<Dictionary<string, Expression>> _macroFrames = new();
 
     private FnCtx? _ctx;
     private ClassDecl? _currentClass;
@@ -391,7 +401,8 @@ public sealed partial class Emitter
 
     private Symbol DeclareGlobal(string name, bool isConst, TextSpan span)
     {
-        if (_globalscope.FindLocal(name) is not null || _types.ContainsKey(name))
+        if (_globalscope.FindLocal(name) is not null || _types.ContainsKey(name) ||
+            _macros.ContainsKey(name))
         {
             _bag.Report(ErrorCode.DuplicateDefinition, span, $"'{name}' 已经定义");
             var old = _globalscope.FindLocal(name);
@@ -779,6 +790,11 @@ public sealed partial class Emitter
         };
         init.Lines.Add((0, 1));
         _ctx = init;
+
+        // 宏先登记：先定义后使用，且允许顶层函数体在文本之前引用
+        foreach (var stmt in _unit.Statements)
+            if (stmt is MacroDecl md)
+                DefineMacro(md);
 
         foreach (var stmt in _unit.Statements)
         {

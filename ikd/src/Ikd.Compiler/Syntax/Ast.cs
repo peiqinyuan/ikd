@@ -163,6 +163,20 @@ public sealed class MatchExpr : Expression
     public List<MatchArm> Arms { get; } = new();
 }
 
+/// <summary>if 表达式：if (cond) value else value。分支可为表达式或值块。</summary>
+public sealed class IfExpr : Expression
+{
+    public Expression Cond { get; set; } = null!;
+    public Expression Then { get; set; } = null!;
+    public Expression Else { get; set; } = null!;
+}
+
+/// <summary>值块：{ 语句...; 表达式 }，整体求值为最后一条表达式语句的值（否则为 null）。</summary>
+public sealed class BlockValueExpr : Expression
+{
+    public BlockStmt Block { get; set; } = null!;
+}
+
 public sealed class CastExpr : Expression
 {
     public Expression Target { get; set; } = null!;
@@ -303,6 +317,23 @@ public sealed class ImportStmt : Statement
     public string? Alias { get; set; }
     public TextSpan PathSpan { get; set; }
     public TextSpan AliasSpan { get; set; }
+}
+
+/// <summary>
+/// 宏声明：macro NAME = 表达式（常量宏）或 macro NAME(a, b) { 语句... }（函数宏）。
+/// 两种都在编译期把体展开到使用处，不产生运行时函数。
+/// </summary>
+public sealed class MacroDecl : Statement
+{
+    public string Name { get; set; } = "";
+    public TextSpan NameSpan { get; set; }
+    public TextSpan LParenSpan { get; set; }
+    public List<ParamSyntax> Params { get; } = new();
+    /// <summary>常量宏的值；与 Body 互斥。</summary>
+    public Expression? Value { get; set; }
+    /// <summary>函数宏的体；与 Value 互斥。</summary>
+    public BlockStmt? Body { get; set; }
+    public bool IsConst => Body is null;
 }
 
 public sealed class ParamSyntax : SyntaxNode

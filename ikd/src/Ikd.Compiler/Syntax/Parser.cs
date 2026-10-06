@@ -94,7 +94,7 @@ public sealed class Parser
         TokenKind.This or TokenKind.Super or TokenKind.New or TokenKind.LParen or
         TokenKind.LBracket or TokenKind.LBrace or TokenKind.Bang or TokenKind.Not or
         TokenKind.Minus or TokenKind.Fn or TokenKind.Match or TokenKind.Pipe or
-        TokenKind.PipePipe;
+        TokenKind.PipePipe or TokenKind.If;
 
     // ---------------- 顶层 ----------------
 
@@ -163,6 +163,8 @@ public sealed class Parser
                 return ParseInterface(new MemberModifiers());
             case TokenKind.Enum:
                 return ParseEnum(new MemberModifiers());
+            case TokenKind.Macro:
+                return ParseMacroDecl();
             case TokenKind.Let:
             case TokenKind.Var:
             case TokenKind.Const:
@@ -327,6 +329,45 @@ public sealed class Parser
         return new IfStmt { Cond = cond, Then = then, Else = els, Span = new TextSpan(kw.Start, end - kw.Start) };
     }
 
+    /// <summary>if 表达式（仅出现在表达式位置；语句位置走 ParseIf）。</summary>
+    private Expression ParseIfExpr()
+    {
+        var kw = Advance();
+        var cond = ParseExpression();
+        var then = ParseBranchValue("if");
+        Expression els;
+        if (Match(TokenKind.Else))
+        {
+            els = Check(TokenKind.If) ? ParseIfExpr() : ParseBranchValue("else");
+        }
+        else
+        {
+            _bag.Report(ErrorCode.ExpectedToken, CurrentSpan,
+                "if 作为表达式时必须有 else 分支", "例如 if (n > 0) \"正\" else \"非正\"");
+            els = new LiteralExpr { Kind = LiteralKind.Null, Value = null, Span = CurrentSpan };
+        }
+        return new IfExpr
+        {
+            Cond = cond,
+            Then = then,
+            Else = els,
+            Span = new TextSpan(kw.Start, els.Span.End - kw.Start),
+        };
+    }
+
+    /// <summary>分支值：'{' 开头视为值块，否则为普通表达式。</summary>
+    private Expression ParseBranchValue(string context)
+    {
+        if (Check(TokenKind.LBrace)) return ParseValueBlock(context + " 分支");
+        return ParseExpression();
+    }
+
+    private Expression ParseValueBlock(string context)
+    {
+        var block = ParseBlock(context);
+        return new BlockValueExpr { Block = block, Span = block.Span };
+    }
+
     private Statement ParseWhile()
     {
         var kw = Advance();
@@ -449,6 +490,54 @@ public sealed class Parser
             AliasSpan = aliasSpan,
             Span = new TextSpan(kw.Start, (aliasSpan.Length > 0 ? aliasSpan.End : pathSpan.End) - kw.Start),
         };
+    }
+
+    /// <summary>macro NAME = 表达式 ;  或  macro NAME(a, b) { 语句... }</summary>
+    private Statement ParseMacroDecl()
+    {
+        var kw = Advance(); // macro
+        string name = ExpectIdentifier("宏名");
+        var nameSpan = Previous.Span;
+        var decl = new MacroDecl { Name = name, NameSpan = nameSpan };
+
+        if (Match(TokenKind.Assign))
+        {
+            decl.Value = ParseExpression();
+            Match(TokenKind.Semicolon);
+            decl.Span = new TextSpan(kw.Start, decl.Value.Span.End - kw.Start);
+            return decl;
+        }
+
+        if (Check(TokenKind.LParen))
+        {
+            var lp = Advance();
+            decl.LParenSpan = lp.Span;
+            while (!AtEnd && !Check(TokenKind.RParen) && !Check(TokenKind.LBrace))
+            {
+                int before = _index;
+                string pn = ExpectIdentifier("宏形参名");
+                var pspan = Previous.Span;
+                TypeSyntax? pt = null;
+                if (Match(TokenKind.Colon)) pt = ParseType();
+                decl.Params.Add(new ParamSyntax
+                {
+                    Name = pn, NameSpan = pspan, Type = pt, Span = pspan,
+                });
+                if (!Match(TokenKind.Comma)) break;
+                if (_index == before) Advance();
+            }
+            Expect(TokenKind.RParen, "宏形参列表需要闭合的 ')'");
+            decl.Body = ParseBlock($"宏 '{name}'");
+            decl.Span = new TextSpan(kw.Start, decl.Body.Span.End - kw.Start);
+            return decl;
+        }
+
+        _bag.Report(ErrorCode.ExpectedToken, CurrentSpan,
+            "macro 定义需要 '=' 或形参列表",
+            "常量宏: macro PI = 3.14 ；函数宏: macro MAX(a, b) { a }");
+        decl.Value = new LiteralExpr { Kind = LiteralKind.Null, Value = null, Span = CurrentSpan };
+        decl.Span = new TextSpan(kw.Start, Previous.End - kw.Start);
+        return decl;
     }
 
     private FnDecl ParseFnDecl(MemberModifiers mods)
@@ -1139,6 +1228,8 @@ public sealed class Parser
                 return ParseAnonymousFn();
             case TokenKind.Match:
                 return ParseMatch();
+            case TokenKind.If:
+                return ParseIfExpr();
             default:
                 _bag.Report(ErrorCode.ExpectedExpression, t.Span,
                     $"此处需要表达式，但读到 {t.Kind.Display()}");
@@ -1298,7 +1389,7 @@ public sealed class Parser
         if (Match(TokenKind.When))
             guard = ParseExpression();
         var arrow = Expect(TokenKind.FatArrow, "match 分支需要 '=>'", "例如 1 => \"一\"");
-        var body = ParseExpression();
+        var body = Check(TokenKind.LBrace) ? ParseValueBlock("match 分支") : ParseExpression();
         return new MatchArm
         {
             Pattern = pattern,

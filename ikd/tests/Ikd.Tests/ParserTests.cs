@@ -22,6 +22,16 @@ public static class ParserTests
         return stmt.Expression;
     }
 
+    /// <summary>取声明初始化表达式，用于解析以 if/match 等关键字开头的表达式。</summary>
+    private static Expression ValueOf(string text)
+    {
+        var (unit, bag) = Parse(text);
+        Assert.False(bag.HasErrors, "解析出错: " + string.Join("; ", bag.Select(d => d.ToString())));
+        var decl = Assert2.IsType<VarDeclStmt>(unit.Statements[0]);
+        Assert.NotNull(decl.Value);
+        return decl.Value!;
+    }
+
     [Test]
     public static void EmptyProgram()
     {
@@ -492,6 +502,122 @@ public static class ParserTests
         var (unit, bag) = Parse("let a = 1 let b = 2");
         Assert.False(bag.HasErrors, string.Join("; ", bag.Select(d => d.ToString())));
         Assert.Equal(2, unit.Statements.Count);
+    }
+
+    // ---------------- if 表达式 / 值块 ----------------
+
+    [Test]
+    public static void IfExpressionParses()
+    {
+        var ie = Assert2.IsType<IfExpr>(ValueOf("let x = if (a) 1 else 2"));
+        Assert2.IsType<NameExpr>(ie.Cond);
+        Assert.Equal(1L, Assert2.IsType<LiteralExpr>(ie.Then).Value);
+        Assert.Equal(2L, Assert2.IsType<LiteralExpr>(ie.Else).Value);
+    }
+
+    [Test]
+    public static void IfExpressionElseIfIsNestedIf()
+    {
+        var outer = Assert2.IsType<IfExpr>(ValueOf("let x = if (a) 1 else if (b) 2 else 3"));
+        var inner = Assert2.IsType<IfExpr>(outer.Else);
+        Assert.Equal(3L, Assert2.IsType<LiteralExpr>(inner.Else).Value);
+    }
+
+    [Test]
+    public static void IfExpressionRequiresElse()
+    {
+        var (unit, bag) = Parse("let x = if (a) 1");
+        Assert.True(bag.HasErrors, "if 表达式缺 else 应报错");
+        Assert.Contains("E2005", string.Join("\n", bag.Select(d => d.ToString())));
+    }
+
+    [Test]
+    public static void StatementIfStillParsesAsStatement()
+    {
+        var (unit, bag) = Parse("if (a) { f(); } else { g(); }");
+        Assert.False(bag.HasErrors, string.Join("; ", bag.Select(d => d.ToString())));
+        Assert.Equal(1, unit.Statements.Count);
+        Assert2.IsType<IfStmt>(unit.Statements[0]);
+    }
+
+    [Test]
+    public static void MatchArmBlockBodyParsesAsValueBlock()
+    {
+        var m = Assert2.IsType<MatchExpr>(ExprOf("match x { 1 => { let a = 2; a } _ => 0 }"));
+        Assert.Equal(2, m.Arms.Count);
+        Assert2.IsType<BlockValueExpr>(m.Arms[0].Body);
+        Assert2.IsType<LiteralExpr>(m.Arms[1].Body);
+    }
+
+    [Test]
+    public static void MatchArmBlockBodyWithIfStatement()
+    {
+        var m = Assert2.IsType<MatchExpr>(
+            ExprOf("match x { _ => { if (c) { f(); } 1 } }"));
+        var blk = Assert2.IsType<BlockValueExpr>(m.Arms[0].Body);
+        Assert.Equal(2, blk.Block.Statements.Count);
+        Assert2.IsType<IfStmt>(blk.Block.Statements[0]);
+        Assert2.IsType<ExprStmt>(blk.Block.Statements[1]);
+    }
+
+    [Test]
+    public static void ValueBlockAsIfBranch()
+    {
+        var ie = Assert2.IsType<IfExpr>(ValueOf("let x = if (a) { let t = 1; t } else { 0 }"));
+        Assert2.IsType<BlockValueExpr>(ie.Then);
+        Assert2.IsType<BlockValueExpr>(ie.Else);
+    }
+
+    // ---------------- 宏 ----------------
+
+    [Test]
+    public static void ConstMacroDecl()
+    {
+        var (unit, bag) = Parse("macro PI = 3.14;");
+        Assert.False(bag.HasErrors, "宏解析失败");
+        var m = Assert2.IsType<MacroDecl>(unit.Statements[0]);
+        Assert.Equal("PI", m.Name);
+        Assert.True(m.IsConst, "应为常量宏");
+        Assert2.IsType<LiteralExpr>(m.Value);
+        Assert.Equal(0, m.Params.Count);
+    }
+
+    [Test]
+    public static void ConstMacroDeclWithExpression()
+    {
+        var (unit, bag) = Parse("macro N = 1 + 2 * 3");
+        Assert.False(bag.HasErrors, "宏解析失败");
+        var m = Assert2.IsType<MacroDecl>(unit.Statements[0]);
+        Assert2.IsType<BinaryExpr>(m.Value);
+    }
+
+    [Test]
+    public static void FunctionMacroDecl()
+    {
+        var (unit, bag) = Parse("macro MAX(a, b) { if (a > b) { a } else { b } }");
+        Assert.False(bag.HasErrors, "宏解析失败");
+        var m = Assert2.IsType<MacroDecl>(unit.Statements[0]);
+        Assert.False(m.IsConst, "应为函数宏");
+        Assert.Equal(2, m.Params.Count);
+        Assert.Equal("a", m.Params[0].Name);
+        Assert.Equal("b", m.Params[1].Name);
+        Assert.NotNull(m.Body);
+        Assert.Equal(1, m.Body!.Statements.Count);
+        Assert2.IsType<IfStmt>(m.Body.Statements[0]);
+    }
+
+    [Test]
+    public static void MacroWithoutSignatureReported()
+    {
+        var (_, bag) = Parse("macro A;");
+        Assert.True(bag.HasErrors, "缺少 '=' 或形参列表应报错");
+    }
+
+    [Test]
+    public static void MacroMissingBodyReported()
+    {
+        var (_, bag) = Parse("macro F(a) return a");
+        Assert.True(bag.HasErrors, "函数宏缺少 '{' 应报错");
     }
 }
 

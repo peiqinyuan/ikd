@@ -26,6 +26,7 @@ public sealed class Lexer
         ["return"] = TokenKind.Return,
         ["match"] = TokenKind.Match,
         ["when"] = TokenKind.When,
+        ["macro"] = TokenKind.Macro,
         ["throw"] = TokenKind.Throw,
         ["try"] = TokenKind.Try,
         ["catch"] = TokenKind.Catch,

@@ -10,6 +10,7 @@ public static class Program
 
     public static int Main(string[] args)
     {
+        UseUtf8Output();
         try
         {
             return Run(args);
@@ -24,6 +25,17 @@ public static class Program
             Console.Error.WriteLine($"ikd: 内部错误: {ex}");
             return 70;
         }
+    }
+
+    /// <summary>统一按 UTF-8 输出（含中文），重定向到文件/管道时不再跟随控制台代码页。</summary>
+    private static void UseUtf8Output()
+    {
+        try
+        {
+            Console.OutputEncoding = new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+        }
+        catch (IOException) { }
+        catch (System.Security.SecurityException) { }
     }
 
     private static int Run(string[] args)

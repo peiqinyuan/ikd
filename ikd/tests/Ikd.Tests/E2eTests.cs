@@ -342,4 +342,248 @@ public static class E2eTests
         Assert.False(result.Success, "循环导入应编译失败");
         Assert.Contains("E4002", string.Join("\n", result.Diagnostics.Items));
     }
+
+    // ---------------- if 表达式 / 值块 / 构造器 ----------------
+
+    [Test]
+    public static void IfExpressionElseIfChain()
+        => AssertOut("pos\nzero\nneg\n",
+            "fn cls(n) { return if (n > 0) \"pos\" else if (n == 0) \"zero\" else \"neg\"; }\n" +
+            "fn main(args) { println(cls(3)); println(cls(0)); println(cls(-1)); return 0; }");
+
+    [Test]
+    public static void IfExpressionWithoutElseReported()
+    {
+        var (stdout, _) = Run("fn main(args) { return if (true) 1; }");
+        Assert.Contains("E2005", stdout);
+        Assert.Contains("else", stdout);
+    }
+
+    [Test]
+    public static void IfExpressionValueBlock()
+        => AssertOut("42\n0\n",
+            "fn main(args) {\n" +
+            "    let a = if (true) { let t = 41; t + 1 } else { 0 };\n" +
+            "    let b = if (false) { 1 } else { 0 };\n" +
+            "    println(toStr(a)); println(toStr(b));\n" +
+            "    return 0;\n}");
+
+    [Test]
+    public static void MatchArmBlockBody()
+        => AssertOut("2\n",
+            "enum Op { Add(Int), Div(Int) }\n" +
+            "fn ev(op, a, b) {\n" +
+            "    return match op {\n" +
+            "        Op.Add(_) => a + b,\n" +
+            "        Op.Div(_) => {\n" +
+            "            if (b == 0) { throw \"div0\"; }\n" +
+            "            a / b\n" +
+            "        },\n" +
+            "    };\n" +
+            "}\n" +
+            "fn main(args) { println(toStr(ev(Op.Div(Op), 5, 2))); return 0; }");
+
+    [Test]
+    public static void MatchArmBlockBodyPropagatesThrow()
+    {
+        var (stdout, code) = Run(
+            "enum Op { Div(Int) }\n" +
+            "fn ev(op, a, b) {\n" +
+            "    return match op {\n" +
+            "        Op.Div(_) => {\n" +
+            "            if (b == 0) { throw \"div0\"; }\n" +
+            "            a / b\n" +
+            "        },\n" +
+            "    };\n" +
+            "}\n" +
+            "fn main(args) { println(toStr(ev(Op.Div(Op), 1, 0))); return 0; }");
+        Assert.Contains("div0", stdout);
+        Assert.True(code != 0, "未捕获的 throw 应非 0 退出");
+    }
+
+    [Test]
+    public static void MapAndListConstructors()
+        => AssertOut("[1, 2, 3]\n[]\n7\n0\n",
+            "fn main(args) {\n" +
+            "    let xs = List(1, 2, 3);\n" +
+            "    let empty = List();\n" +
+            "    let m = Map(\"k\", 7);\n" +
+            "    println(toStr(xs));\n" +
+            "    println(toStr(empty));\n" +
+            "    println(toStr(m.get(\"k\")));\n" +
+            "    println(toStr(len(Map())));\n" +
+            "    return 0;\n}");
+
+    [Test]
+    public static void MapOddArgsThrows()
+    {
+        var (stdout, code) = Run("fn main(args) { let m = Map(\"k\"); return 0; }");
+        Assert.Contains("偶数", stdout);
+        Assert.True(code != 0, "Map 参数个数为奇数应报运行时错误");
+    }
+
+    [Test]
+    public static void IfExpressionAsArgumentAndReturnValue()
+        => AssertOut("10\n",
+            "fn pick(n) { return if (n > 5) 10 else 20; }\n" +
+            "fn main(args) { println(toStr(pick(9))); return 0; }");
+
+    // ---------------- 宏 ----------------
+
+    [Test]
+    public static void ConstMacroExpansion()
+        => AssertOut("3.14\nA=7\n",
+            "macro PI = 3.14;\n" +
+            "macro TAG = \"A\";\n" +
+            "fn main(args) { println(toStr(PI)); println(TAG + \"=7\"); return 0; }");
+
+    [Test]
+    public static void FunctionMacroExpansion()
+        => AssertOut("10\n10\n4\n",
+            "macro MAX(a, b) { if (a > b) { a } else { b } }\n" +
+            "macro TWICE(x) { x + x }\n" +
+            "fn main(args) {\n" +
+            "    println(toStr(MAX(3, 10)));\n" +
+            "    println(toStr(MAX(10, 3)));\n" +
+            "    println(toStr(TWICE(2)));\n" +
+            "    return 0;\n}");
+
+    [Test]
+    public static void MacroArgumentEvaluatedOnce()
+        => AssertOut("2\n1\n",
+            "var g = 0;\n" +
+            "macro TWICE(x) { x + x }\n" +
+            "fn bump() { g = g + 1; return g; }\n" +
+            "fn main(args) {\n" +
+            "    println(toStr(TWICE(bump())));\n" +
+            "    println(toStr(g));\n" +
+            "    return 0;\n}");
+
+    [Test]
+    public static void MacroParamShadowedByLocal()
+        => AssertOut("100\n",
+            "macro SHADOW(a) { let a = 99; a + 1 }\n" +
+            "fn main(args) { println(toStr(SHADOW(1))); return 0; }");
+
+    [Test]
+    public static void NestedMacroExpansion()
+        => AssertOut("4\n",
+            "macro ADD(a, b) { a + b }\n" +
+            "macro FOUR(x) { ADD(x, x) }\n" +
+            "fn main(args) { println(toStr(FOUR(2))); return 0; }");
+
+    [Test]
+    public static void MacroReturnLeaksToCaller()
+        => AssertOut("pos\nneg\n",
+            "macro EARLY(x) { if (x > 0) { return \"pos\"; } \"neg\" }\n" +
+            "fn cls(n) { return EARLY(n); }\n" +
+            "fn main(args) { println(cls(5)); println(cls(-1)); return 0; }");
+
+    [Test]
+    public static void MacroBreakLeavesCallerLoop()
+        => AssertOut("1\n",
+            "var g = 0;\n" +
+            "macro STOP() { break }\n" +
+            "fn main(args) {\n" +
+            "    for i in range(0, 10) { g = g + 1; STOP(); }\n" +
+            "    println(toStr(g));\n" +
+            "    return 0;\n}");
+
+    [Test]
+    public static void MacroUsedBeforeTextualDeclaration()
+        => AssertOut("7\n",
+            "fn main(args) { println(toStr(THREE() + 4)); return 0; }\n" +
+            "macro THREE() { 3 }");
+
+    [Test]
+    public static void MacroArityMismatchReported()
+    {
+        var (stdout, _) = Run("macro HALF(x) { x / 2 }\nfn main(args) { return HALF(1, 2); }");
+        Assert.Contains("E3004", stdout);
+        Assert.Contains("HALF", stdout);
+    }
+
+    [Test]
+    public static void MacroDuplicateReported()
+    {
+        var (stdout, _) = Run("macro A = 1;\nmacro A = 2;\nfn main(args) { return 0; }");
+        Assert.Contains("E3008", stdout);
+    }
+
+    [Test]
+    public static void MacroInsideFunctionReported()
+    {
+        var (stdout, _) = Run(
+            "fn main(args) { macro B = 3; println(toStr(B)); return 0; }");
+        Assert.Contains("E2011", stdout);
+        Assert.Contains("顶层", stdout);
+    }
+
+    [Test]
+    public static void MacroSelfReferenceReported()
+    {
+        var (stdout, _) = Run(
+            "macro REC(x) { x + REC(x) }\nfn main(args) { return REC(1); }");
+        Assert.Contains("E3037", stdout);
+    }
+
+    [Test]
+    public static void ConstantMacroCannotBeCalled()
+    {
+        var (stdout, _) = Run("macro A = 1;\nfn main(args) { return A(1); }");
+        Assert.Contains("E3003", stdout);
+    }
+
+    [Test]
+    public static void FunctionMacroUsedAsValueReported()
+    {
+        var (stdout, _) = Run(
+            "macro TWICE(x) { x + x }\nfn main(args) { let f = TWICE; return 0; }");
+        Assert.Contains("E3003", stdout);
+    }
+
+    [Test]
+    public static void MacroCollidingWithGlobalReported()
+    {
+        var (stdout, _) = Run(
+            "fn main(args) { return 0; }\nclass Box { }\nmacro Box = 1;");
+        Assert.Contains("E3008", stdout);
+    }
+
+    // ---------------- sizeof ----------------
+
+    [Test]
+    public static void SizeOfBuiltinTypes()
+        => AssertOut("8\n8\n1\n16\n16\n16\n48\n",
+            "fn main(args) {\n" +
+            "    println(toStr(sizeof(Int)));\n" +
+            "    println(toStr(sizeof(Float)));\n" +
+            "    println(toStr(sizeof(Bool)));\n" +
+            "    println(toStr(sizeof(Str)));\n" +
+            "    println(toStr(sizeof(List)));\n" +
+            "    println(toStr(sizeof(Map)));\n" +
+            "    println(toStr(sizeof(Fn)));\n" +
+            "    return 0;\n}");
+
+    [Test]
+    public static void SizeOfValues()
+        => AssertOut("0\n1\n8\n20\n80\n64\n",
+            "fn main(args) {\n" +
+            "    println(toStr(sizeof(null)));\n" +
+            "    println(toStr(sizeof(true)));\n" +
+            "    println(toStr(sizeof(42)));\n" +
+            "    println(toStr(sizeof(\"hi\")));\n" +
+            "    println(toStr(sizeof([1, 2, 3, 4])));\n" +
+            "    println(toStr(sizeof(Map(\"k\", 1))));\n" +
+            "    return 0;\n}");
+
+    [Test]
+    public static void SizeOfInstanceCountsFields()
+        => AssertOut("48\n80\n",
+            "class Point { let x = 0; let y = 0; }\n" +
+            "fn main(args) {\n" +
+            "    let p = Point();\n" +
+            "    println(toStr(sizeof(p)));\n" +
+            "    println(toStr(sizeof(Point)));\n" +
+            "    return 0;\n}");
 }

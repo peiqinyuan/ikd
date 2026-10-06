@@ -1,0 +1,37 @@
+import "std.http";
+
+fn fetch(url) {
+    let r = http.request("GET", url, null, null, 10);
+    if (!r.get("ok")) {
+        println("  失败 status=" + toStr(r.get("status")) +
+                " type=" + r.get("errorType") +
+                " msg=" + r.get("error"));
+        return null;
+    }
+    return r;
+}
+
+fn main(args) {
+    println("GET https://www.example.com/");
+    let r = fetch("https://www.example.com/");
+    if (r != null) {
+        println("  status = " + toStr(r.get("status")));
+        println("  ok     = " + toStr(r.get("ok")));
+        println("  server = " + r.get("headers").getOr("server", "(无)"));
+        println("  bytes  = " + toStr(len(r.get("body"))));
+    }
+
+    let miss = http.request("GET", "https://www.example.com/no-such-page", null, null, 10);
+    println("404 -> status=" + toStr(miss.get("status")) + " ok=" + toStr(miss.get("ok")));
+
+    let bad = http.request("GET", "ftp://example.com/");
+    println("坏 URL -> status=" + toStr(bad.get("status")) +
+            " errorType=" + bad.get("errorType"));
+
+    let dead = http.request("GET", "http://127.0.0.1:9/", null, null, 3);
+    println("连不上 -> status=" + toStr(dead.get("status")) +
+            " errorType=" + dead.get("errorType") +
+            " msg=" + dead.get("error"));
+
+    return 0;
+}

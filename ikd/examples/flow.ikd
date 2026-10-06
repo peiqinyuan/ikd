@@ -1,0 +1,41 @@
+// 控制流综合示例：if 表达式、值块、match 分支块、Map()/List()
+
+enum Op { Add(Int), Sub(Int), Mul(Int), Div(Int) }
+
+fn eval(op, a, b) {
+    return match op {
+        Op.Add(_) => a + b,
+        Op.Sub(_) => a - b,
+        Op.Mul(_) => a * b,
+        Op.Div(_) => {
+            if (b == 0) { throw "不能除以 0" }
+            a / b
+        },
+    }
+}
+
+fn classify(n) {
+    return if (n > 0) "正数" else if (n == 0) "零" else "负数";
+}
+
+fn main(args) {
+    println("eval Div = " + toStr(eval(Op.Div(Op), 10, 4)));
+    println("eval Mul = " + toStr(eval(Op.Mul(Op), 6, 7)));
+
+    var err = "无";
+    try { eval(Op.Div(Op), 1, 0); } catch e { err = toStr(e); }
+    println("异常捕获 = " + err);
+
+    println("classify  = " + classify(7) + " / " + classify(0) + " / " + classify(-2));
+
+    let xs = List(3, 1, 2);
+    let m = Map("语言", "ikd", "版本", "0.1");
+    println("list = " + toStr(xs) + " len=" + toStr(len(xs)));
+    println("map  = " + m.get("语言") + " " + m.get("版本") + " 条目=" + toStr(len(m.keys())));
+    println("空容器 = " + toStr(len(List())) + "/" + toStr(len(Map())));
+
+    let gap = if (len(args) > 0) args else List("（无参数）");
+    println("args = " + toStr(gap));
+
+    return 0;
+}

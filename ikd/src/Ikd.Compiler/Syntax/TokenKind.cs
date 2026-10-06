@@ -50,6 +50,7 @@ public enum TokenKind
     Or,
     Not,
     Is,
+    Macro,
 
     // 标点
     LParen,          // (
@@ -92,7 +93,7 @@ public enum TokenKind
 public static class TokenKindExtensions
 {
     public static bool IsKeyword(this TokenKind kind)
-        => kind >= TokenKind.Class && kind <= TokenKind.Is;
+        => kind >= TokenKind.Class && kind <= TokenKind.Macro;
 
     /// <summary>用于诊断消息的人类可读文本。</summary>
     public static string Display(this TokenKind kind) => kind switch
@@ -140,6 +141,7 @@ public static class TokenKindExtensions
         TokenKind.Or => "'or'",
         TokenKind.Not => "'not'",
         TokenKind.Is => "'is'",
+        TokenKind.Macro => "'macro'",
         TokenKind.LParen => "'('",
         TokenKind.RParen => "')'",
         TokenKind.LBrace => "'{'",

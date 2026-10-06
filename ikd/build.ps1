@@ -2,6 +2,12 @@
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
 
+# 空间预检：单文件产物约 36MB，构建/临时解压需要余量
+$drive = (Get-Item $PSScriptRoot).PSDrive
+if ($drive.Free -ne $null -and $drive.Free -lt 500MB) {
+    Write-Warning "驱动器 $($drive.Name) 剩余空间仅 $([math]::Round($drive.Free / 1MB, 0)) MB，构建可能失败"
+}
+
 Write-Host "== restore / build =="
 dotnet build ikd.slnx -c Release
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -24,7 +30,8 @@ if (-not (Test-Path $ikd)) { Write-Error "未生成 $ikd"; exit 1 }
 # geometry.ikd 是纯库（无 main），不参与直接运行
 $appExamples = @(
     "hello.ikd", "shapes.ikd", "generics.ikd", "oo.ikd",
-    "app.ikd", "closures.ikd", "match.ikd", "errors.ikd"
+    "app.ikd", "closures.ikd", "match.ikd", "errors.ikd", "flow.ikd",
+    "macro.ikd", "http.ikd"
 )
 
 Write-Host "== ikd version =="
@@ -58,7 +65,8 @@ foreach ($e in $appExamples) {
 }
 
 Write-Host "== 零依赖冒烟（把 ikd.exe 拷到临时目录） =="
-$smoke = Join-Path $env:TEMP ("ikd-smoke-" + [Guid]::NewGuid().ToString("N"))
+# 注意：C 盘可能接近满，临时目录放在产物目录下（D 盘）
+$smoke = Join-Path $dist "smoke-tmp"
 New-Item -ItemType Directory -Path $smoke -Force | Out-Null
 try {
     Copy-Item $ikd (Join-Path $smoke "ikd.exe")

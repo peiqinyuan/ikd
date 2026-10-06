@@ -61,6 +61,7 @@ public enum ErrorCode
     MatchArmUnreachable = 3034,
     InterfaceMethodMustBeAbstract = 3035,
     StaticMemberAccess = 3036,
+    MacroRecursive = 3037,
     UnknownError = 3999,
 
     // ---- 模块/IO 4xxx ----
